@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI playground</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+.q { border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:8px; background:var(--bg); }
+.q .row > * { flex:1; }
+.q .row > select { flex:0 0 110px; }
+.q .row > button { flex:0 0 auto; }
+.res { margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Playground</h1><span id="dev"></span></header>
+<div class="row" style="margin-bottom:10px"><span class="dim">Presets:</span><span id="presets" class="row"></span></div>
+<div class="grid2">
+  <div class="card"><h2>State</h2>
+    <textarea id="state" rows="16" spellcheck="false"></textarea>
+    <p class="dim" style="font-size:13px;margin:6px 0 0">Plain text or JSON. Long states are shortened to the first and last part.</p>
+  </div>
+  <div class="card"><h2>Questions</h2>
+    <div id="qs"></div>
+    <div class="row">
+      <button onclick="addQ('noul')">+ yes/no</button><button onclick="addQ('choice')">+ choice</button><button onclick="addQ('score')">+ score</button>
+      <span style="flex:1"></span><button class="primary" id="go" onclick="run()">Ask FERMI</button>
+    </div>
+    <div class="status" id="st"></div>
+  </div>
+</div>
+<details class="card"><summary class="dim">Request and raw answer (JSON)</summary><pre id="raw"></pre></details>
+</main>
+<script src="fermi.js"></script>
+<script>
+const PRESETS = {
+  "Support ticket": {
+    state: {channel: "email", subject: "Charged twice!!", body: "Hi, I was charged twice for my March subscription (2 x 19.90 EUR). I need the money back before the weekend, I'm short on rent. Order #A-55812."},
+    questions: [
+      {id: "refund", type: "noul", instructions: "Is the customer asking for a refund?", criteria: {true: "Asks for money back", false: "Does not ask for money back"}},
+      {id: "topic", type: "choice", instructions: "What is the main topic?", criteria: {billing: "Payments, charges, invoices", technical: "Bugs, errors, access problems", account: "Profile, password, settings", other: "Anything else"}},
+      {id: "urgency", type: "score", instructions: "How urgent is the request?", criteria: ["Not urgent", "Low", "Medium", "High", "Critical"]}]},
+  "Product review": {
+    state: "Five stars for the design, zero for the battery. It looked great for a week, then it started dying by lunchtime. Support told me to 'recalibrate'. Returned it.",
+    questions: [
+      {id: "sentiment", type: "choice", instructions: "Overall sentiment of the review?", criteria: {positive: "", mixed: "", negative: ""}},
+      {id: "returned", type: "noul", instructions: "Did the customer return the product?"},
+      {id: "stars", type: "score", instructions: "How many stars would this review most likely give?", criteria: ["1 star", "2 stars", "3 stars", "4 stars", "5 stars"]}]},
+  "Server metrics": {
+    state: {server: "api-3", interval: "1m", cpu_pct: [31, 33, 35, 34, 88, 97, 99, 99], p99_latency_ms: [110, 105, 118, 112, 740, 1900, 2400, 2600], errors_per_min: [2, 1, 3, 2, 40, 180, 350, 410]},
+    questions: [
+      {id: "incident", type: "noul", instructions: "Is there an ongoing incident that needs a human now?"},
+      {id: "cause", type: "choice", instructions: "Most likely first symptom?", criteria: {cpu_saturation: "CPU saturates first", latency: "Latency rises first", errors: "Errors rise first", none: "Nothing abnormal"}},
+      {id: "severity", type: "score", instructions: "Severity of the situation?", criteria: ["Normal", "Minor", "Degraded", "Major", "Outage"]}]},
+  "Italiano": {
+    state: "Buongiorno, vi scrivo perché il pacco ordinato il 3 maggio risulta consegnato ma io non ho ricevuto nulla. Il portiere dice di non aver firmato niente. Cosa devo fare?",
+    questions: [
+      {id: "consegna", type: "noul", instructions: "Il cliente dice di non aver ricevuto il pacco?"},
+      {id: "tono", type: "choice", instructions: "Qual è il tono del messaggio?", criteria: {cortese: "Educato e calmo", arrabbiato: "Irritato o aggressivo", neutro: "Solo fatti"}},
+      {id: "priorita", type: "score", instructions: "Che priorità dare alla richiesta?", criteria: ["Bassa", "Media", "Alta"]}]}
+};
+
+function qBox(q) {
+  const d = document.createElement("div");
+  d.className = "q";
+  d.dataset.type = q.type;
+  const crit = q.type === "noul" ? (q.criteria ? `yes: ${q.criteria.true}\nno: ${q.criteria.false}` : "")
+             : q.type === "choice" ? Object.entries(q.criteria || {}).map(([k, v]) => v ? `${k}: ${v}` : k).join("\n")
+             : (q.criteria || []).join("\n");
+  const hint = {noul: "optional — two lines: 'yes: …' and 'no: …'", choice: "one option per line: 'name: description'",
+                score: "one level per line, lowest first"}[q.type];
+  d.innerHTML = `<div class="row"><select onchange="this.closest('.q').dataset.type=this.value">
+      <option value="noul">yes/no</option><option value="choice">choice</option><option value="score">score</option></select>
+      <input type="text" class="ins" placeholder="question" value="${esc(q.instructions || "")}">
+      <button title="remove" onclick="this.closest('.q').remove()">✕</button></div>
+    <textarea class="crit" rows="${q.type === "noul" ? 2 : 4}" placeholder="${hint}" style="margin-top:6px">${esc(crit)}</textarea>
+    <div class="res"></div>`;
+  d.querySelector("select").value = q.type;
+  return d;
+}
+
+function addQ(type) {
+  const base = {noul: {type, instructions: ""}, choice: {type, instructions: "", criteria: {option_a: "", option_b: ""}},
+                score: {type, instructions: "", criteria: ["low", "medium", "high"]}}[type];
+  document.getElementById("qs").appendChild(qBox(base));
+}
+
+function readQs() {
+  const out = {};
+  [...document.querySelectorAll(".q")].forEach((d, i) => {
+    const type = d.dataset.type, ins = d.querySelector(".ins").value.trim();
+    const lines = d.querySelector(".crit").value.split("\n").map(s => s.trim()).filter(Boolean);
+    const q = {type, instructions: ins};
+    if (type === "noul") {
+      const y = lines.find(l => /^yes\s*:/i.test(l)), n = lines.find(l => /^no\s*:/i.test(l));
+      if (y && n) q.criteria = {true: y.replace(/^yes\s*:\s*/i, ""), false: n.replace(/^no\s*:\s*/i, "")};
+    } else if (type === "choice") {
+      q.criteria = {};
+      lines.forEach(l => { const k = l.indexOf(":"); if (k < 0) q.criteria[l] = ""; else q.criteria[l.slice(0, k).trim()] = l.slice(k + 1).trim(); });
+    } else q.criteria = lines;
+    out["q" + (i + 1)] = q;
+  });
+  return out;
+}
+
+function stateValue() {
+  const t = document.getElementById("state").value;
+  try { const j = JSON.parse(t); if (typeof j === "object") return j; } catch (e) {}
+  return t;
+}
+
+async function run() {
+  const qs = readQs(), st = document.getElementById("st"), go = document.getElementById("go");
+  if (!Object.keys(qs).length) { st.textContent = "Add at least one question."; return; }
+  go.disabled = true; st.className = "status"; st.textContent = "FERMI is reading…";
+  try {
+    const state = stateValue();
+    const r = await fermi(state, qs);
+    [...document.querySelectorAll(".q")].forEach((d, i) => {
+      const id = "q" + (i + 1), a = r.answers[id];
+      let extra = a.type === "score" ? `<div class="dim" style="font-size:13px;margin-top:4px">expected level ${a.expected.toFixed(2)} (${pct(a.expected_01)} of the scale)</div>` : "";
+      d.querySelector(".res").innerHTML = bars(answerItems(qs[id], a)) + extra;
+    });
+    st.textContent = `${Object.keys(qs).length} answers in ${r.ms} ms`;
+    document.getElementById("raw").textContent = JSON.stringify({request: {state, questions: qs}, response: r}, null, 1);
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  go.disabled = false;
+}
+
+function load(name) {
+  const p = PRESETS[name];
+  document.getElementById("state").value = typeof p.state === "string" ? p.state : JSON.stringify(p.state, null, 1);
+  const qs = document.getElementById("qs"); qs.innerHTML = "";
+  p.questions.forEach(q => qs.appendChild(qBox(q)));
+}
+document.getElementById("presets").innerHTML = Object.keys(PRESETS).map(k => `<button onclick="load('${k}')">${k}</button>`).join("");
+load("Support ticket");
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI live moderation</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+.light { display:flex; align-items:center; gap:12px; font-size:18px; font-weight:600; margin-bottom:10px; }
+.light .dot { width:22px; height:22px; border-radius:50%; background:var(--bar); transition:background .3s; }
+.chat { display:flex; flex-direction:column; gap:6px; max-height:300px; overflow:auto; }
+.msg { padding:7px 11px; border-radius:12px; background:var(--bg); border:1px solid var(--line); align-self:flex-start; max-width:85%; font-size:14px; }
+.msg.flag { border-color:var(--bad); }
+.msg small { display:block; color:var(--dim); font-size:11.5px; margin-top:2px; }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Live moderation</h1><span id="dev"></span></header>
+<p class="dim" style="margin-top:-6px">Type a message for a game community chat. FERMI checks it while you type (three questions per check).</p>
+<div class="grid2">
+  <div class="card"><h2>Your message</h2>
+    <textarea id="t" rows="4" placeholder="type here…" style="font-family:inherit;font-size:15px"></textarea>
+    <div class="row" style="margin-top:8px"><span class="dim" style="font-size:13px">Try:</span><span id="ex" class="row"></span></div>
+    <div class="row" style="margin-top:8px"><button class="primary" id="send" onclick="send()">Send</button><span class="status" id="st"></span></div>
+  </div>
+  <div class="card"><h2>FERMI</h2>
+    <div class="light"><div class="dot" id="dot"></div><span id="verdict">waiting</span></div>
+    <div id="res" class="dim">Start typing.</div>
+  </div>
+</div>
+<div class="card"><h2>Chat</h2><div class="chat" id="chat"></div></div>
+</main>
+<script src="fermi.js"></script>
+<script>
+const EX = ["gg everyone, that last round was close!", "uninstall the game, you are the worst player I have ever seen",
+            "FREE SKINS!!! click bit.ly/fr33sk1ns and log in with your account", "if I find where you live you'll regret it",
+            "anyone up for ranked tonight around 9?", "sei proprio un incapace, lascia perdere"];
+const Q = {
+  ok: {type: "noul", instructions: "Is the message acceptable for a friendly game community chat?",
+       criteria: {true: "Friendly, neutral or mild banter", false: "Insults, threats, harassment, spam or scams"}},
+  kind: {type: "choice", instructions: "What kind of message is it?", criteria: {
+         normal: "Ordinary chat", insult: "Insults or demeans someone", threat: "Threatens harm", spam: "Advertising, scam links, phishing", other: "Other problem"}},
+  severity: {type: "score", instructions: "How severe is the problem, if any?", criteria: ["None", "Mild", "Moderate", "Serious", "Extreme"]}
+};
+let timer = null, seq = 0, last = null;
+const t = document.getElementById("t");
+document.getElementById("ex").innerHTML = EX.map((e, i) => `<button onclick="t.value=EX[${i}];check()" style="font-size:12.5px;padding:3px 9px">${esc(e.slice(0, 26))}…</button>`).join("");
+t.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(check, 450); });
+
+async function check() {
+  const text = t.value.trim();
+  if (!text) return;
+  const my = ++seq, st = document.getElementById("st");
+  st.textContent = "checking…";
+  try {
+    const r = await fermi({platform: "game community chat", message: text}, Q);
+    if (my !== seq) return;
+    last = {text, a: r.answers};
+    const a = r.answers, pOk = a.ok.p_yes;
+    const col = pOk > 0.7 ? "var(--ok)" : pOk > 0.35 ? "var(--acc2)" : "var(--bad)";
+    document.getElementById("dot").style.background = col;
+    document.getElementById("verdict").textContent = pOk > 0.7 ? "looks fine" : pOk > 0.35 ? "not sure" : "blocked: " + a.kind.answer;
+    document.getElementById("res").innerHTML =
+      `<div class="dim" style="font-size:13px;margin-bottom:3px">acceptable?</div>` + bars([["yes", pOk], ["no", 1 - pOk]]) +
+      `<div class="dim" style="font-size:13px;margin:10px 0 3px">kind</div>` + bars(Object.entries(a.kind.probabilities)) +
+      `<div class="dim" style="font-size:13px;margin:10px 0 3px">severity</div>` + bars(a.severity.probabilities.map((p, i) => [Q.severity.criteria[i], p]));
+    document.getElementById("res").className = "";
+    st.textContent = r.ms + " ms";
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+}
+
+async function send() {
+  const text = t.value.trim();
+  if (!text) return;
+  if (!last || last.text !== text) await check();
+  const a = last.a, flag = a.ok.p_yes <= 0.35;
+  const d = document.createElement("div");
+  d.className = "msg" + (flag ? " flag" : "");
+  d.innerHTML = (flag ? `<i class="dim">message hidden by FERMI (${esc(a.kind.answer)})</i>` : esc(text)) +
+    `<small>acceptable ${pct(a.ok.p_yes)} · severity ${a.severity.expected.toFixed(1)}/4</small>`;
+  document.getElementById("chat").appendChild(d);
+  t.value = "";
+}
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>

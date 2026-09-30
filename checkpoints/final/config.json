@@ -1,0 +1,65 @@
+{
+ "base_model": "Qwen/Qwen3.5-0.8B",
+ "lora_rank": 32,
+ "lora_alpha": 64,
+ "lora_targets": [
+  "down_proj",
+  "gate_proj",
+  "in_proj_qkv",
+  "in_proj_z",
+  "k_proj",
+  "o_proj",
+  "out_proj",
+  "q_proj",
+  "up_proj",
+  "v_proj"
+ ],
+ "head_dim": 512,
+ "max_len": 2048,
+ "prompt_version": 1,
+ "training_step": 783,
+ "training": {
+  "epochs": 0.5,
+  "lr": 0.0002,
+  "lr_head": 0.001,
+  "tokens_per_micro_batch": 16384,
+  "accumulation": 4
+ },
+ "evaluation": {
+  "n": 5651,
+  "tutte": {
+   "n": 5651,
+   "ce": 0.6231,
+   "kl": 0.184,
+   "accordo_qwen": 0.8161,
+   "tv": 0.1772
+  },
+  "noul": {
+   "n": 2389,
+   "ce": 0.3645,
+   "kl": 0.1109,
+   "accordo_qwen": 0.887,
+   "tv": 0.121
+  },
+  "choice": {
+   "n": 1684,
+   "ce": 0.7052,
+   "kl": 0.234,
+   "accordo_qwen": 0.81,
+   "tv": 0.2009
+  },
+  "score": {
+   "n": 1578,
+   "ce": 0.9268,
+   "kl": 0.2414,
+   "accordo_qwen": 0.7155,
+   "tv": 0.2371
+  },
+  "ece": 0.0684,
+  "jev": {
+   "n": 200,
+   "accordo": 0.76,
+   "ce": 0.6804
+  }
+ }
+}

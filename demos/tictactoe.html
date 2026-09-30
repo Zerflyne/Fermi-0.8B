@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI tic-tac-toe</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+.board { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; width:min(360px, 100%); aspect-ratio:1; }
+.cell { position:relative; border-radius:12px; border:1px solid var(--line); background:var(--bg); font-size:56px; font-weight:700;
+        display:flex; align-items:center; justify-content:center; cursor:pointer; overflow:hidden; padding:0; }
+.cell .heat { position:absolute; inset:0; background:var(--acc2); opacity:0; transition:opacity .3s; }
+.cell .pp { position:absolute; bottom:4px; right:7px; font-size:12px; font-weight:500; color:var(--dim); }
+.cell span.m { position:relative; }
+.cell.x span.m { color:var(--acc); }
+.cell.o span.m { color:var(--acc2); }
+.cell.win { border:2px solid var(--ok); }
+.score { display:flex; gap:18px; font-size:15px; }
+.score b { font-size:22px; }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Tic-tac-toe</h1><span id="dev"></span></header>
+<p class="dim" style="margin-top:-6px">You are ✕, FERMI is ◯. FERMI is a classifier, not a game engine: each move is one "pick one option"
+question over the empty cells. The orange shade shows how much probability it gave to each cell.</p>
+<div class="grid2">
+  <div class="card"><div class="board" id="board"></div>
+    <div class="row" style="margin-top:12px"><button onclick="reset(false)">New game (you start)</button><button onclick="reset(true)">FERMI starts</button></div>
+  </div>
+  <div class="card"><h2>Game</h2>
+    <div class="score"><div>You <b id="sx">0</b></div><div>FERMI <b id="so">0</b></div><div>Draws <b id="sd">0</b></div></div>
+    <div class="status" id="st" style="margin:10px 0"></div>
+    <div id="threat"></div>
+    <div id="why" style="margin-top:10px"></div>
+  </div>
+</div>
+</main>
+<script src="fermi.js"></script>
+<script>
+const NAMES = ["a1: top left", "a2: top middle", "a3: top right", "b1: middle left", "b2: center", "b3: middle right",
+               "c1: bottom left", "c2: bottom middle", "c3: bottom right"];
+const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+let B, busy, over, score = {x: 0, o: 0, d: 0}, heat = {};
+
+function winner(b) {
+  for (const l of LINES) if (b[l[0]] && b[l[0]] === b[l[1]] && b[l[1]] === b[l[2]]) return {who: b[l[0]], line: l};
+  return b.every(Boolean) ? {who: "draw"} : null;
+}
+function draw(win) {
+  document.getElementById("board").innerHTML = B.map((v, i) => {
+    const h = heat[i];
+    return `<button class="cell ${v || ""} ${win && win.line && win.line.includes(i) ? "win" : ""}" onclick="play(${i})">
+      <div class="heat" style="opacity:${h ? (0.12 + 0.6 * h).toFixed(2) : 0}"></div><span class="m">${v === "x" ? "✕" : v === "o" ? "◯" : ""}</span>
+      ${h && !v ? `<span class="pp">${pct(h)}</span>` : ""}</button>`;
+  }).join("");
+}
+function stateFor(b) {
+  const rows = [0, 3, 6].map(r => b.slice(r, r + 3).map(v => v === "x" ? "X" : v === "o" ? "O" : ".").join(""));
+  return {game: "tic-tac-toe", board_top_to_bottom: rows, rows: "a (top), b (middle), c (bottom)", columns: "1 (left), 2 (middle), 3 (right)",
+          players: "X = human, O = FERMI", to_move: "O"};
+}
+function finish() {
+  const w = winner(B);
+  if (!w) return false;
+  over = true; heat = {}; draw(w);
+  const st = document.getElementById("st");
+  if (w.who === "x") { score.x++; st.innerHTML = "<b>You win.</b>"; }
+  else if (w.who === "o") { score.o++; st.innerHTML = "<b>FERMI wins.</b>"; }
+  else { score.d++; st.innerHTML = "<b>Draw.</b>"; }
+  ["x", "o", "d"].forEach(k => document.getElementById("s" + k).textContent = score[k]);
+  return true;
+}
+async function fermiMove() {
+  busy = true;
+  const st = document.getElementById("st"); st.className = "status"; st.textContent = "FERMI is thinking…";
+  const empty = B.map((v, i) => v ? null : i).filter(i => i !== null);
+  const crit = {};
+  empty.forEach(i => crit[NAMES[i].split(":")[0]] = NAMES[i].split(": ")[1]);
+  try {
+    const r = await fermi(stateFor(B), {
+      move: {type: "choice", instructions: "Which empty cell should O play? Win now if possible; otherwise block a line where X already has two; otherwise take the strongest cell.", criteria: crit},
+      danger: {type: "noul", instructions: "Does X have two in a row with the third cell empty, so X could win on the next move?"}});
+    const pr = r.answers.move.probabilities;
+    heat = {}; empty.forEach(i => heat[i] = pr[NAMES[i].split(":")[0]]);
+    const best = empty.reduce((a, b) => heat[b] > heat[a] ? b : a);
+    B[best] = "o";
+    document.getElementById("threat").innerHTML = `<div class="dim" style="font-size:13px">"Can ✕ win on the next move?" (before FERMI's move)</div>` +
+      bars([["yes", r.answers.danger.p_yes], ["no", 1 - r.answers.danger.p_yes]]);
+    document.getElementById("why").innerHTML = `<div class="dim" style="font-size:13px">FERMI's choice</div>` +
+      bars(empty.map(i => [NAMES[i], heat[i]]).sort((a, b) => b[1] - a[1]));
+    st.textContent = `FERMI played ${NAMES[best]} (${r.ms} ms). Your turn.`;
+    if (!finish()) draw();
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  busy = false;
+}
+function play(i) {
+  if (busy || over || B[i]) return;
+  B[i] = "x"; heat = {}; draw();
+  if (!finish()) fermiMove();
+}
+function reset(fermiFirst) {
+  B = Array(9).fill(null); busy = false; over = false; heat = {};
+  document.getElementById("threat").innerHTML = ""; document.getElementById("why").innerHTML = "";
+  document.getElementById("st").textContent = fermiFirst ? "" : "Your move.";
+  draw();
+  if (fermiFirst) fermiMove();
+}
+reset(false);
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>

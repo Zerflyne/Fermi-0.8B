@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI demos</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+.demos { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+.demos a.card { display:block; text-decoration:none; color:inherit; transition:border-color .15s; }
+.demos a.card:hover { border-color:var(--acc); }
+.demos h3 { margin:0 0 4px; font-size:17px; }
+.demos p { margin:0; color:var(--dim); font-size:14px; }
+.demos .ico { font-size:26px; margin-bottom:6px; }
+</style>
+</head>
+<body>
+<main>
+<header class="top"><h1>FERMI demos</h1><span id="dev"></span></header>
+<p class="dim" style="margin-top:-6px">FERMI reads a <b>state</b> (any text or JSON) and answers typed questions with probabilities:
+yes/no, pick one option, or pick a level on a scale. It never writes text. Everything below runs on your machine.</p>
+
+<div class="demos">
+  <a class="card" href="playground.html"><div class="ico">🧪</div><h3>Playground</h3>
+    <p>Write any state, add your own questions, see the full probability distribution for each answer.</p></a>
+  <a class="card" href="moderation.html"><div class="ico">🛡️</div><h3>Live moderation</h3>
+    <p>Type a chat message: FERMI flags insults, threats and spam as you write, with a severity scale.</p></a>
+  <a class="card" href="inbox.html"><div class="ico">📬</div><h3>Inbox triage</h3>
+    <p>Eight emails, three questions each: urgency, category, needs a reply. FERMI sorts the inbox.</p></a>
+  <a class="card" href="twenty.html"><div class="ico">❓</div><h3>Twenty questions</h3>
+    <p>A secret card is hidden from you but not from FERMI. Ask yes/no questions, read the odds, guess.</p></a>
+  <a class="card" href="tictactoe.html"><div class="ico">⭕</div><h3>Tic-tac-toe</h3>
+    <p>Play against FERMI. Every move is a "pick one option" question; see where it wants to play.</p></a>
+</div>
+
+<div class="card" style="margin-top:14px"><h2>Evaluation of this checkpoint</h2><div id="eval" class="dim">…</div></div>
+</main>
+<script src="fermi.js"></script>
+<script>
+deviceBadge(document.getElementById("dev"));
+fermiInfo().then(i => {
+  const e = i && i.evaluation;
+  if (!e || !e.tutte) { document.getElementById("eval").textContent = i ? "no evaluation stored in this checkpoint" : "server not running"; return; }
+  const row = (n, k) => e[k] ? `<tr><td>${n}</td><td>${e[k].n}</td><td>${pct(e[k].accordo_qwen)}</td><td>${e[k].ce.toFixed(3)}</td></tr>` : "";
+  document.getElementById("eval").innerHTML =
+    `<table style="width:100%;border-collapse:collapse;font-size:14px"><tr class="dim"><td>questions</td><td>n</td><td>same answer as the teacher</td><td>cross-entropy</td></tr>` +
+    row("all", "tutte") + row("yes/no", "noul") + row("choice", "choice") + row("score", "score") + `</table>` +
+    (e.jev ? `<p class="dim" style="margin:8px 0 0">On 200 reference questions answered by Jev: same answer ${pct(e.jev.accordo)}.</p>` : "");
+});
+</script>
+</body>
+</html>

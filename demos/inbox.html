@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI inbox triage</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { font-size:12px; color:var(--dim); font-weight:500; cursor:pointer; user-select:none; }
+td.sub { cursor:pointer; }
+td.sub b { display:block; }
+td.sub span { color:var(--dim); font-size:12.5px; }
+.u { display:inline-block; min-width:64px; padding:2px 8px; border-radius:6px; font-size:12.5px; font-variant-numeric:tabular-nums; color:#fff; }
+.mini { width:90px; height:8px; background:var(--bar); border-radius:4px; overflow:hidden; display:inline-block; vertical-align:middle; margin-right:6px; }
+.mini div { height:100%; background:var(--acc); }
+tr.open td { background:var(--bg); }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Inbox triage</h1><span id="dev"></span></header>
+<div class="card">
+  <div class="row"><button class="primary" id="go" onclick="triage()">Triage the inbox</button>
+    <button onclick="addMail()">+ add your email</button><span class="status" id="st"></span></div>
+  <table style="margin-top:10px"><thead><tr><th onclick="sortBy('urg')">urgency ▾</th><th>email</th><th onclick="sortBy('cat')">category</th>
+    <th onclick="sortBy('reply')">needs a reply</th></tr></thead><tbody id="tb"></tbody></table>
+  <p class="dim" style="font-size:13px;margin:8px 0 0">Click an email to read it and see FERMI's full answers. Sorted by expected urgency.</p>
+</div>
+</main>
+<script src="fermi.js"></script>
+<script>
+let MAILS = [
+  {from: "ops-alerts@acme.io", subject: "[P1] Checkout API returning 500s", body: "Since 09:12 UTC about 30% of checkout requests fail with HTTP 500. Revenue impact is growing. On-call engineer is not answering the pager. Please acknowledge."},
+  {from: "newsletter@designweekly.com", subject: "10 color palettes for autumn", body: "This week: warm palettes, a font pairing guide and an interview with a type designer. Unsubscribe any time."},
+  {from: "maria.rossi@client-co.it", subject: "Contract renewal — need your signature today", body: "Hi, the renewal expires tonight at midnight. If we don't have the signed PDF by then, the price goes back to the list price (+18%). Can you sign and send it back?"},
+  {from: "no-reply@bank.example", subject: "Your monthly statement is ready", body: "Your statement for September is now available in online banking. No action is required."},
+  {from: "luca@team.internal", subject: "Lunch on Friday?", body: "Hey, a few of us are going to the new ramen place on Friday at 1pm. Want to join? No pressure."},
+  {from: "security@acme.io", subject: "Suspicious login to your account", body: "We detected a login to your admin account from a new device in another country 5 minutes ago. If this wasn't you, reset your password immediately and contact security."},
+  {from: "hr@acme.io", subject: "Reminder: benefits enrollment closes in 3 weeks", body: "Open enrollment for next year's benefits closes on the 25th. Please review your options when you have time."},
+  {from: "angry.customer@mail.example", subject: "Still waiting for my refund!!!", body: "This is the third email. You promised a refund two weeks ago and nothing arrived. If I don't hear back by tomorrow I'll dispute the charge with my bank."}
+];
+const Q = {
+  urg: {type: "score", instructions: "How urgent is it to act on this email?", criteria: ["No urgency", "Low: this week is fine", "Medium: within a day or two", "High: today", "Critical: right now"]},
+  cat: {type: "choice", instructions: "Which folder does this email belong to?", criteria: {
+        incident: "Outages, alerts, security problems", customer: "Customers and clients", internal: "Colleagues, HR, internal matters",
+        finance: "Banks, invoices, payments", marketing: "Newsletters, promotions"}},
+  reply: {type: "noul", instructions: "Does this email need a reply or an action from the recipient?",
+          criteria: {true: "The recipient has to answer, sign, fix or decide something", false: "Informational only"}}
+};
+const R = {};
+let open = -1, key = "urg";
+const color = e => `hsl(${120 - 30 * e} 60% 42%)`;
+
+function render() {
+  const idx = MAILS.map((m, i) => i);
+  const v = (i) => { const r = R[i]; if (!r) return -1;
+    return key === "urg" ? r.urg.expected : key === "reply" ? r.reply.p_yes : -Object.keys(Q.cat.criteria).indexOf(r.cat.answer); };
+  idx.sort((a, b) => v(b) - v(a));
+  document.getElementById("tb").innerHTML = idx.map(i => {
+    const m = MAILS[i], r = R[i];
+    const u = r ? `<span class="u" style="background:${color(r.urg.expected)}">${r.urg.expected.toFixed(1)} / 4</span>` : `<span class="dim">…</span>`;
+    const c = r ? `${esc(r.cat.answer)} <span class="dim">${pct(r.cat.probabilities[r.cat.answer])}</span>` : "";
+    const y = r ? `<span class="mini"><div style="width:${100 * r.reply.p_yes}%"></div></span>${pct(r.reply.p_yes)}` : "";
+    let row = `<tr class="${open === i ? "open" : ""}"><td>${u}</td><td class="sub" onclick="toggle(${i})"><b>${esc(m.subject)}</b><span>${esc(m.from)}</span></td><td>${c}</td><td>${y}</td></tr>`;
+    if (open === i) row += `<tr class="open"><td></td><td colspan="3"><p style="margin:0 0 10px">${esc(m.body)}</p>` +
+      (r ? `<div class="grid2"><div><div class="dim" style="font-size:12.5px">urgency</div>${bars(r.urg.probabilities.map((p, k) => [Q.urg.criteria[k], p]))}</div>
+            <div><div class="dim" style="font-size:12.5px">category</div>${bars(Object.entries(r.cat.probabilities))}</div></div>` : "") + `</td></tr>`;
+    return row;
+  }).join("");
+}
+function toggle(i) { open = open === i ? -1 : i; render(); }
+function sortBy(k) { key = k; render(); }
+function addMail() {
+  const subject = prompt("Subject"); if (!subject) return;
+  const body = prompt("Body") || "";
+  MAILS.push({from: "you@example.com", subject, body}); render(); triage([MAILS.length - 1]);
+}
+async function triage(which) {
+  const go = document.getElementById("go"), st = document.getElementById("st");
+  const list = which || MAILS.map((m, i) => i);
+  go.disabled = true; st.className = "status";
+  let ms = 0;
+  try {
+    for (const [k, i] of list.entries()) {
+      st.textContent = `reading ${k + 1}/${list.length}…`;
+      const r = await fermi({type: "email", ...MAILS[i]}, Q);
+      R[i] = r.answers; ms += r.ms; render();
+    }
+    st.textContent = `done: ${list.length} emails, ${3 * list.length} answers, ${(ms / 1000).toFixed(1)} s`;
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  go.disabled = false;
+}
+render();
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>

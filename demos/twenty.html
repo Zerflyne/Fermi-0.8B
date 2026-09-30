@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI twenty questions</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+.log { display:flex; flex-direction:column; gap:8px; }
+.qa { display:grid; grid-template-columns:1fr 170px; gap:10px; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); }
+.qa .ans { font-weight:650; }
+.meter { height:10px; border-radius:5px; background:linear-gradient(90deg, var(--bad), var(--bar) 50%, var(--ok)); position:relative; }
+.meter i { position:absolute; top:-3px; width:4px; height:16px; background:var(--txt); border-radius:2px; transform:translateX(-2px); }
+.cands { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:6px; }
+.cands button { text-align:left; }
+.cands button.out { opacity:.35; text-decoration:line-through; }
+.big { font-size:22px; font-weight:650; }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Twenty questions</h1><span id="dev"></span></header>
+<p class="dim" style="margin-top:-6px">One of the cards below is secret. FERMI can read it, you can't. Ask yes/no questions; FERMI answers with
+a probability. Cross out cards by clicking them, then guess. Fewer questions = better score.</p>
+<div class="grid2">
+  <div class="card"><h2>Ask</h2>
+    <div class="row"><input type="text" id="q" placeholder="e.g. Is it an animal?" onkeydown="if(event.key==='Enter')ask()">
+      <button class="primary" id="ask" onclick="ask()">Ask</button></div>
+    <div class="row" style="margin-top:6px"><span class="dim" style="font-size:13px">Ideas:</span><span id="ideas" class="row"></span></div>
+    <div class="status" id="st"></div>
+    <div class="log" id="log"></div>
+  </div>
+  <div class="card"><h2>Cards <span class="dim" id="count" style="text-transform:none;letter-spacing:0"></span></h2>
+    <div class="cands" id="cands"></div>
+    <div class="row" style="margin-top:12px"><select id="guess" style="flex:1"></select><button onclick="guess()">Guess</button>
+      <button onclick="newGame()">New game</button></div>
+    <div id="result" style="margin-top:10px"></div>
+  </div>
+</div>
+</main>
+<script src="fermi.js"></script>
+<script>
+const CARDS = [
+  {name: "Elephant", text: "The largest land animal alive today. Grey, with a long trunk, big ears and ivory tusks. Lives in Africa and Asia, eats plants, lives in herds."},
+  {name: "Penguin", text: "A black and white bird that cannot fly. Swims very well, eats fish, lives mostly in the Southern Hemisphere, many species in Antarctica."},
+  {name: "Honeybee", text: "A small flying insect with yellow and black stripes. Lives in large colonies, makes honey and wax, pollinates flowers, can sting."},
+  {name: "Eiffel Tower", text: "A wrought-iron lattice tower in Paris, France, finished in 1889. About 330 metres tall. One of the most visited monuments in the world."},
+  {name: "Bicycle", text: "A human-powered vehicle with two wheels, pedals, a chain and handlebars. Used for transport, sport and leisure. No engine."},
+  {name: "Smartphone", text: "A pocket-sized electronic device with a touchscreen, battery, camera and internet connection. Used for calls, messages and apps."},
+  {name: "Pizza Margherita", text: "An Italian dish from Naples: flat baked dough with tomato, mozzarella and basil, cooked in a very hot oven. Eaten warm."},
+  {name: "Marie Curie", text: "A physicist and chemist born in Warsaw in 1867, worked in France. First woman to win a Nobel Prize and the only person to win Nobel Prizes in two sciences (physics and chemistry). Studied radioactivity."},
+  {name: "Leonardo da Vinci", text: "An Italian Renaissance painter, engineer and inventor, born in 1452. Painted the Mona Lisa and The Last Supper, filled notebooks with designs of machines."},
+  {name: "The Moon", text: "Earth's only natural satellite. Rocky, with craters, no atmosphere to speak of. Causes tides. Humans walked on it in 1969."},
+  {name: "Volcano", text: "An opening in the Earth's crust where molten rock, ash and gases escape. Can erupt explosively. Found in mountains and islands, e.g. Etna and Vesuvius."},
+  {name: "Guitar", text: "A string musical instrument, usually with six strings, a wooden body and a neck with frets. Played by plucking or strumming. Acoustic or electric."}
+];
+const IDEAS = ["Is it alive?", "Is it an animal?", "Can it fly?", "Is it a person?", "Is it made by humans?", "Is it in Europe?", "Can you eat it?", "Is it electronic?", "Is it bigger than a car?"];
+let secret, asked, crossed;
+document.getElementById("ideas").innerHTML = IDEAS.map(q => `<button style="font-size:12.5px;padding:3px 9px" onclick="document.getElementById('q').value='${q}';ask()">${q}</button>`).join("");
+
+function newGame() {
+  secret = CARDS[Math.floor(Math.random() * CARDS.length)];
+  asked = 0; crossed = new Set();
+  document.getElementById("log").innerHTML = ""; document.getElementById("result").innerHTML = ""; document.getElementById("st").textContent = "";
+  document.getElementById("guess").innerHTML = CARDS.map(c => `<option>${esc(c.name)}</option>`).join("");
+  drawCards();
+}
+function drawCards() {
+  document.getElementById("cands").innerHTML = CARDS.map((c, i) =>
+    `<button class="${crossed.has(i) ? "out" : ""}" title="${esc(c.text)}" onclick="cross(${i})">${esc(c.name)}</button>`).join("");
+  document.getElementById("count").textContent = `· ${CARDS.length - crossed.size} left · ${asked} questions`;
+}
+function cross(i) { crossed.has(i) ? crossed.delete(i) : crossed.add(i); drawCards(); }
+
+async function ask() {
+  const inp = document.getElementById("q"), q = inp.value.trim(), st = document.getElementById("st");
+  if (!q) return;
+  document.getElementById("ask").disabled = true; st.className = "status"; st.textContent = "FERMI is thinking…";
+  try {
+    // "it" -> "the thing": FERMI answers more reliably when the question names what the state describes
+    const qq = /\bit\b/i.test(q) ? q.replace(/\bit\b/i, "the thing") : q + " (about the thing)";
+    const r = await fermi({thing: secret.name, description: secret.text}, {a: {type: "noul", instructions: qq}});
+    const p = r.answers.a.p_yes; asked++;
+    const word = p > 0.8 ? "Yes" : p > 0.6 ? "Probably yes" : p >= 0.4 ? "Not sure" : p >= 0.2 ? "Probably not" : "No";
+    const d = document.createElement("div"); d.className = "qa";
+    d.innerHTML = `<div>${esc(q)}</div><div><div class="ans">${word} <span class="dim" style="font-weight:400">${pct(p)}</span></div><div class="meter"><i style="left:${100 * p}%"></i></div></div>`;
+    document.getElementById("log").prepend(d);
+    inp.value = ""; st.textContent = r.ms + " ms"; drawCards();
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  document.getElementById("ask").disabled = false;
+}
+function guess() {
+  const g = document.getElementById("guess").value, ok = g === secret.name;
+  document.getElementById("result").innerHTML = ok
+    ? `<div class="big" style="color:var(--ok)">Right! ${esc(secret.name)} in ${asked} questions.</div>`
+    : `<div class="big" style="color:var(--bad)">No, it was ${esc(secret.name)}.</div><div class="dim">${esc(secret.text)}</div>`;
+}
+newGame();
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>

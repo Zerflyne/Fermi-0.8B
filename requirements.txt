@@ -1,0 +1,5 @@
+# CPU (or Apple MPS). For NVIDIA GPUs see requirements-gpu.txt.
+torch>=2.5
+transformers>=5.0
+peft>=0.17
+safetensors

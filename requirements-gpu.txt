@@ -1,0 +1,3 @@
+# NVIDIA GPU: install PyTorch with CUDA first (https://pytorch.org/get-started/locally/), then:
+-r requirements.txt
+flash-linear-attention>=0.5   # fast Triton kernels for the linear-attention layers (optional, ~10x faster)

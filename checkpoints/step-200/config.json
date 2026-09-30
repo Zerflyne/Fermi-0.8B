@@ -1,0 +1,67 @@
+{
+ "base_model": "Qwen/Qwen3.5-0.8B",
+ "lora_rank": 32,
+ "lora_alpha": 64,
+ "lora_targets": [
+  "down_proj",
+  "gate_proj",
+  "in_proj_qkv",
+  "in_proj_z",
+  "k_proj",
+  "o_proj",
+  "out_proj",
+  "q_proj",
+  "up_proj",
+  "v_proj"
+ ],
+ "head_dim": 512,
+ "max_len": 2048,
+ "prompt_version": 1,
+ "training_step": 200,
+ "training": {
+  "epochs": 0.5,
+  "lr": 0.0002,
+  "lr_head": 0.001,
+  "tokens_per_micro_batch": 16384,
+  "accumulation": 4
+ },
+ "evaluation": {
+  "passo": 200,
+  "n": 2538,
+  "tutte": {
+   "n": 2538,
+   "ce": 0.6868,
+   "kl": 0.2488,
+   "accordo_qwen": 0.7734,
+   "tv": 0.2146
+  },
+  "noul": {
+   "n": 1083,
+   "ce": 0.4235,
+   "kl": 0.1568,
+   "accordo_qwen": 0.8319,
+   "tv": 0.1515
+  },
+  "choice": {
+   "n": 761,
+   "ce": 0.786,
+   "kl": 0.3223,
+   "accordo_qwen": 0.7727,
+   "tv": 0.2445
+  },
+  "score": {
+   "n": 694,
+   "ce": 0.9887,
+   "kl": 0.3118,
+   "accordo_qwen": 0.683,
+   "tv": 0.2804
+  },
+  "ece": 0.0363,
+  "jev": {
+   "n": 200,
+   "accordo": 0.765,
+   "ce": 0.7369
+  },
+  "set": "eval subset (2,538 questions)"
+ }
+}
