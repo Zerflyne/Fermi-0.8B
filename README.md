@@ -13,6 +13,9 @@ with **probabilities**. It never generates text: every answer is a distribution 
 One state can carry many questions; each is scored independently. This is version **0.1**, a first prototype:
 Qwen3.5-0.8B + a LoRA adapter + a small decision head, trained for about 6 hours on one RTX 4060.
 
+**Bigger sibling:** [FERMI-2B](https://github.com/Zerflyne/FERMI-2B) (MiniCPM5-2B base, one full epoch): 85.3% agreement
+with the teacher instead of 81.6%, same code and demos. Use it if you have ~5 GB of GPU memory.
+
 ## Quick start
 
 ```bash
@@ -59,6 +62,19 @@ python server.py            # then open http://127.0.0.1:8765
 - **Twenty questions**: a secret card that FERMI can read and you can't; ask yes/no questions and read the odds.
 - **Tic-tac-toe**: play against FERMI; each move is a `choice` over the empty cells, shown as a heat map.
   It plays badly, and that is instructive: FERMI is a classifier, not a game engine.
+
+Games that show how much a classifier depends on what you tell it. Most have a **hints** switch: with hints, the page
+computes plain facts about each option (this column blocks X, this move hits the wall…) and FERMI still has to read them
+and pick; without hints, FERMI gets only the raw board.
+
+- **Snake**: FERMI steers in real time, one "which way?" question per step.
+- **Connect four**: play against FERMI and see the probability of every column.
+- **Pong**: FERMI holds a paddle at 60 frames per second, answering "up, stay or down?" as fast as it can.
+- **Blackjack**: FERMI decides hit or stand; the textbook basic strategy scores how often it agrees with the math.
+- **Rock, paper, scissors**: FERMI predicts your next move from the history and plays the counter; try the pattern bots.
+
+Choice questions in the games are asked with the options in several orders and averaged (`fermiChoice` in
+`demos/fermi.js`): small classifiers have a position bias, and this removes most of it.
 
 The server also exposes the model as a JSON API: `POST /api/classify` with `{"state": ..., "questions": {...}}`.
 
@@ -132,7 +148,7 @@ on an RTX 4060 8 GB.
 ## Limitations
 
 - **Distilled.** FERMI imitates a 27B teacher and inherits its mistakes; it is not ground truth.
-- **Half an epoch.** v0.1 saw half of the training data once. More training and the 2B version are in progress.
+- **Half an epoch.** v0.1 saw half of the training data once. [FERMI-2B](https://github.com/Zerflyne/FERMI-2B) saw all of it.
 - **Calibration.** On unseen states, when FERMI is confident it is usually right, but at the end of training it
   became somewhat overconfident (expected calibration error vs the teacher's top answer: 0.068). Treat mid-range
   probabilities as "unsure", not as exact frequencies.

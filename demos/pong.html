@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI pong</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+canvas { width:100%; max-width:600px; aspect-ratio:3/2; display:block; border-radius:12px; border:1px solid var(--line); background:var(--bg); touch-action:none; }
+.stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:12px; }
+.stats div { border:1px solid var(--line); border-radius:10px; padding:6px 10px; background:var(--bg); }
+.stats b { display:block; font-size:20px; font-variant-numeric:tabular-nums; } .stats span { font-size:12px; color:var(--dim); }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.seg button { border:0; border-radius:0; } .seg button.on { background:var(--acc); color:#fff; }
+label.sl { font-size:13px; color:var(--dim); display:flex; gap:6px; align-items:center; }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Pong</h1><span id="dev"></span></header>
+<p class="dim" style="margin-top:-6px">FERMI holds the right paddle, in real time: the game runs at 60 frames per second and FERMI keeps
+answering "up, stay or down?" as fast as it can; the paddle follows its latest answer. You play left with the mouse, a finger or
+W/S, or let a simple bot play. <b>Raw</b> gives FERMI only positions and speeds; <b>hints</b> also says where the ball will arrive.</p>
+<div class="grid2">
+  <div class="card">
+    <canvas id="cv" width="600" height="400"></canvas>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="go" onclick="toggle()">Start</button>
+      <span class="seg"><button id="m0" onclick="setMode(0)">Raw</button><button id="m1" onclick="setMode(1)">Hints</button></span>
+      <label class="sl"><input type="checkbox" id="bot"> Bot plays left</label>
+      <label class="sl"><input type="checkbox" id="avg" checked> Average over option orders</label>
+    </div>
+  </div>
+  <div class="card">
+    <div class="stats">
+      <div><b id="s-you">0</b><span>left</span></div>
+      <div><b id="s-fermi">0</b><span>FERMI</span></div>
+      <div><b id="s-hits">0</b><span>FERMI returns</span></div>
+      <div><b id="s-ms">–</b><span>ms per decision</span></div>
+    </div>
+    <h2>Latest decision</h2>
+    <div id="why" class="dim">Press Start.</div>
+    <details style="margin-top:10px"><summary class="dim" style="font-size:13px;cursor:pointer">What FERMI sees</summary><pre id="seen"></pre></details>
+  </div>
+</div>
+</main>
+<script src="fermi.js"></script>
+<script>
+const W = 600, H = 400, PH = 80, PW = 10, BR = 7;
+let ball, left, right, act = "stay", running = false, mode = 1, score = {you: 0, fermi: 0}, hits = 0, keys = {}, mouseY = null;
+const times = [];
+function serve(dir) { const a = (Math.random() - 0.5) * 0.9; ball = {x: W / 2, y: H / 2, vx: dir * 4 * Math.cos(a), vy: 4 * Math.sin(a)}; }
+function reset() { left = H / 2; right = H / 2; serve(Math.random() < 0.5 ? -1 : 1); }
+
+// where the ball will cross the right paddle's line, with wall bounces (null if moving away)
+function arrival() {
+  if (ball.vx <= 0) return null;
+  let t = (W - 20 - PW - ball.x) / ball.vx, y = ball.y + ball.vy * t;
+  const span = H - 2 * BR; y -= BR;
+  y = ((y % (2 * span)) + 2 * span) % (2 * span); if (y > span) y = 2 * span - y;
+  return {y: y + BR, frames: Math.max(0, Math.round(t))};
+}
+function stateAndQuestion() {
+  const r = Math.round, s = {game: "pong", you: "the RIGHT paddle", court: `${W} wide, ${H} tall; y = 0 is the top`,
+    ball: `x ${r(ball.x)}, y ${r(ball.y)}`, ball_speed: `${r(ball.vx * 10) / 10} per frame horizontally (positive = towards you), ${r(ball.vy * 10) / 10} vertically (positive = down)`,
+    your_paddle: `centre at y ${r(right)}, ${PH} tall`};
+  const crit = {up: "move the paddle up", stay: "keep the paddle still", down: "move the paddle down"};
+  if (mode === 1) {
+    const a = arrival(), target = a ? a.y : H / 2, d = target - right;
+    s.ball_arrives = a ? `at y ${r(a.y)} in ${a.frames} frames` : "the ball is moving away; wait in the middle";
+    s.distance = Math.abs(d) < 12 ? "your paddle is lined up" : `the paddle centre is ${r(Math.abs(d))} ${d < 0 ? "below" : "above"} the target`;
+    const toward = d < 0 ? "up" : "down";
+    if (Math.abs(d) < 12) { crit.stay = "keep the paddle where it is: it is lined up with the target"; crit.up = "moves away from the target"; crit.down = "moves away from the target"; }
+    else { crit[toward] = "moves the paddle towards the target"; crit[toward === "up" ? "down" : "up"] = "moves the paddle away from the target"; crit.stay = "the paddle stays off target"; }
+  }
+  return {state: s, q: {type: "choice", criteria: crit, instructions: "Which way should the right paddle move so that it is in front of the ball when the ball reaches the right side?"}};
+}
+async function brain() {
+  while (running) {
+    const {state, q} = stateAndQuestion();
+    document.getElementById("seen").textContent = JSON.stringify({state, question: q}, null, 1);
+    try {
+      const r = await fermiChoice(state, q, document.getElementById("avg").checked);
+      act = r.best; times.push(r.ms); if (times.length > 30) times.shift();
+      document.getElementById("why").innerHTML = bars(["up", "stay", "down"].map(k => [mode ? `${k}: ${q.criteria[k]}` : k, r.pr[k]]));
+      document.getElementById("s-ms").textContent = Math.round(times.reduce((a, b) => a + b) / times.length);
+    } catch (e) { running = false; document.getElementById("why").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  }
+}
+function step() {
+  // left: bot, keys or mouse
+  if (document.getElementById("bot").checked) left += Math.max(-4.5, Math.min(4.5, ball.y - left));
+  else if (keys.w || keys.s) left += (keys.s ? 6 : 0) - (keys.w ? 6 : 0);
+  else if (mouseY !== null) left += Math.max(-8, Math.min(8, mouseY - left));
+  right += act === "up" ? -6 : act === "down" ? 6 : 0;
+  left = Math.max(PH / 2, Math.min(H - PH / 2, left)); right = Math.max(PH / 2, Math.min(H - PH / 2, right));
+  ball.x += ball.vx; ball.y += ball.vy;
+  if (ball.y < BR || ball.y > H - BR) { ball.vy *= -1; ball.y = Math.max(BR, Math.min(H - BR, ball.y)); }
+  const hit = (py, side) => Math.abs(ball.y - py) < PH / 2 + BR;
+  if (ball.vx < 0 && ball.x - BR <= 20 + PW && ball.x > 10 && hit(left)) { ball.vx = -ball.vx * 1.04; ball.vy += (ball.y - left) / 12; ball.x = 20 + PW + BR; }
+  if (ball.vx > 0 && ball.x + BR >= W - 20 - PW && ball.x < W - 10 && hit(right)) { ball.vx = -ball.vx * 1.04; ball.vy += (ball.y - right) / 12; ball.x = W - 20 - PW - BR; hits++; }
+  ball.vy = Math.max(-7, Math.min(7, ball.vy)); ball.vx = Math.max(-9, Math.min(9, ball.vx));
+  if (ball.x < -20) { score.fermi++; serve(1); }
+  if (ball.x > W + 20) { score.you++; serve(-1); }
+}
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function draw() {
+  const c = document.getElementById("cv").getContext("2d");
+  c.clearRect(0, 0, W, H);
+  c.strokeStyle = css("--line"); c.setLineDash([6, 8]); c.beginPath(); c.moveTo(W / 2, 0); c.lineTo(W / 2, H); c.stroke(); c.setLineDash([]);
+  c.fillStyle = css("--acc"); c.fillRect(20, left - PH / 2, PW, PH);
+  c.fillStyle = css("--acc2"); c.fillRect(W - 20 - PW, right - PH / 2, PW, PH);
+  if (mode === 1) { const a = arrival(); if (a) { c.strokeStyle = css("--acc2"); c.globalAlpha = .5; c.beginPath(); c.arc(W - 25, a.y, 6, 0, 7); c.stroke(); c.globalAlpha = 1; } }
+  c.fillStyle = css("--txt"); c.beginPath(); c.arc(ball.x, ball.y, BR, 0, 7); c.fill();
+  c.font = "600 13px system-ui"; c.fillStyle = css("--dim"); c.textAlign = "right"; c.fillText("FERMI: " + act, W - 30, 20);
+  document.getElementById("s-you").textContent = score.you; document.getElementById("s-fermi").textContent = score.fermi;
+  document.getElementById("s-hits").textContent = hits;
+}
+function frame() { if (!running) return; step(); draw(); requestAnimationFrame(frame); }
+function toggle() {
+  running = !running; document.getElementById("go").textContent = running ? "Pause" : "Start";
+  if (running) { requestAnimationFrame(frame); brain(); }
+}
+function setMode(m) { mode = m; [0, 1].forEach(i => document.getElementById("m" + i).className = m === i ? "on" : ""); }
+document.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
+document.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+const cv = document.getElementById("cv");
+const toY = e => (e.clientY - cv.getBoundingClientRect().top) * H / cv.getBoundingClientRect().height;
+cv.addEventListener("mousemove", e => mouseY = toY(e));
+cv.addEventListener("touchmove", e => { mouseY = toY(e.touches[0]); e.preventDefault(); }, {passive: false});
+setMode(1); reset(); draw();
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>

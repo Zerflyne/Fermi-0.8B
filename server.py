@@ -83,10 +83,11 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--device", default="auto", help="auto, cuda, cpu, mps")
     ap.add_argument("--checkpoint", default=DEFAULT_CKPT)
-    ap.add_argument("--base", default=None, help="Hugging Face id or local folder of Qwen3.5-0.8B")
+    ap.add_argument("--base", default=None, help="Hugging Face id or local folder of the base model (default: from config.json)")
     a = ap.parse_args()
     model = Fermi.load(a.checkpoint, base=a.base, device=a.device)
-    info = {"model": "FERMI-0.8B", "device": str(model.device), "dtype": str(model.dtype).replace("torch.", ""),
+    size = os.path.basename(os.path.normpath(model.config["base_model"])).split("-")[-1]   # Qwen3.5-0.8B -> 0.8B
+    info = {"model": "FERMI-" + size, "device": str(model.device), "dtype": str(model.dtype).replace("torch.", ""),
             "checkpoint": os.path.basename(os.path.normpath(a.checkpoint)), "base": model.config["base_model"],
             "evaluation": model.config.get("evaluation")}
     s = ThreadingHTTPServer((a.host, a.port), make_handler(model, info))

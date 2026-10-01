@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI connect four</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+.wrap { width:min(430px, 100%); }
+.heat { display:grid; grid-template-columns:repeat(7, 1fr); gap:6px; margin-bottom:6px; }
+.heat div { height:44px; border-radius:8px; background:var(--bar); position:relative; overflow:hidden; }
+.heat div i { position:absolute; left:0; right:0; bottom:0; background:var(--acc2); transition:height .3s; }
+.heat div span { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; }
+.board { display:grid; grid-template-columns:repeat(7, 1fr); gap:6px; padding:8px; border-radius:14px; background:var(--acc); }
+.board button { aspect-ratio:1; border-radius:50%; border:0; padding:0; background:var(--bg); cursor:pointer; }
+.board button.x { background:#e5484d; }
+.board button.o { background:#f5c518; }
+.board button.win { outline:3px solid var(--ok); outline-offset:-3px; }
+.score { display:flex; gap:18px; } .score b { font-size:22px; }
+label.sl { font-size:13px; color:var(--dim); display:flex; gap:6px; align-items:center; }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Connect four</h1><span id="dev"></span></header>
+<p class="dim" style="margin-top:-6px">You are red, FERMI is yellow. Every FERMI move is one "pick a column" question; the bars above the board
+show the probability it gave each column. With <b>hints</b> on, each column comes with a plain description of what the move does
+(computed by this page, not by FERMI): FERMI still has to read them and pick.</p>
+<div class="grid2">
+  <div class="card"><div class="wrap">
+    <div class="heat" id="heat"></div>
+    <div class="board" id="board"></div>
+    <div class="row" style="margin-top:12px">
+      <button onclick="reset(false)">New game (you start)</button><button onclick="reset(true)">FERMI starts</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="sl"><input type="checkbox" id="hints" checked> Hints</label>
+      <label class="sl"><input type="checkbox" id="avg" checked> Average over option orders</label>
+    </div>
+  </div></div>
+  <div class="card"><h2>Game</h2>
+    <div class="score"><div>You <b id="sx">0</b></div><div>FERMI <b id="so">0</b></div><div>Draws <b id="sd">0</b></div></div>
+    <div class="status" id="st" style="margin:10px 0"></div>
+    <div id="why"></div>
+    <details style="margin-top:10px"><summary class="dim" style="font-size:13px;cursor:pointer">What FERMI sees</summary><pre id="seen"></pre></details>
+  </div>
+</div>
+</main>
+<script src="fermi.js"></script>
+<script>
+const R = 6, C = 7;
+let B, busy, over, heat = {}, score = {x: 0, o: 0, d: 0};
+
+const free = c => { for (let r = R - 1; r >= 0; r--) if (!B[r][c]) return r; return -1; };
+const legal = () => [...Array(C).keys()].filter(c => free(c) >= 0);
+function lineAt(b, r, c, who) {
+  // longest line through (r, c) for who, and the cells of a four if there is one
+  let best = 1, four = null;
+  for (const [dr, dc] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
+    const cells = [[r, c]];
+    for (const s of [1, -1]) {
+      let rr = r + dr * s, cc = c + dc * s;
+      while (rr >= 0 && rr < R && cc >= 0 && cc < C && b[rr][cc] === who) { cells.push([rr, cc]); rr += dr * s; cc += dc * s; }
+    }
+    best = Math.max(best, cells.length);
+    if (cells.length >= 4) four = cells;
+  }
+  return {best, four};
+}
+function drop(b, c, who) { const r = free(c); b[r][c] = who; return r; }
+function undo(b, r, c) { b[r][c] = null; }
+function hint(c) {
+  const r = drop(B, c, "o");
+  const mine = lineAt(B, r, c, "o");
+  let h;
+  if (mine.four) h = "WINS THE GAME NOW: four in a row for O. Best move.";
+  else {
+    const r2 = free(c);
+    let gives = false;
+    if (r2 >= 0) { B[r2][c] = "x"; gives = !!lineAt(B, r2, c, "x").four; B[r2][c] = null; }
+    undo(B, r, c);
+    B[r][c] = "x"; const blocks = !!lineAt(B, r, c, "x").four; B[r][c] = null;
+    if (blocks) h = "Must block: if O does not play here, X wins on the next move.";
+    else if (gives) h = "Losing move: X wins at once by playing on top of it.";
+    else h = `Safe; makes ${mine.best} in a row for O.`;
+    return h;
+  }
+  undo(B, r, c);
+  return h;
+}
+function stateAndQuestion() {
+  const rows = B.map(row => row.map(v => v === "x" ? "X" : v === "o" ? "O" : ".").join(" "));
+  const state = {game: "connect four", board_top_to_bottom: rows, columns: "1 to 7, left to right",
+                 rules: "Players drop a disc into a column; it falls to the lowest empty cell. Four in a row (horizontal, vertical or diagonal) wins.",
+                 players: "X = human, O = FERMI", to_move: "O"};
+  const crit = {};
+  for (const c of legal()) crit["column " + (c + 1)] = document.getElementById("hints").checked ? hint(c) : "";
+  return {state, q: {type: "choice", criteria: crit,
+          instructions: "Which column should O play? First: if a move wins now, play it. Second: if X would win next move somewhere, block it there. Otherwise pick the best safe move."}};
+}
+function winner() {
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) if (B[r][c]) {
+    const l = lineAt(B, r, c, B[r][c]); if (l.four) return {who: B[r][c], cells: l.four};
+  }
+  return legal().length ? null : {who: "draw", cells: []};
+}
+function draw(win) {
+  const w = new Set((win && win.cells || []).map(([r, c]) => r + "," + c));
+  document.getElementById("board").innerHTML = B.map((row, r) => row.map((v, c) =>
+    `<button class="${v || ""} ${w.has(r + "," + c) ? "win" : ""}" onclick="play(${c})" aria-label="column ${c + 1}"></button>`).join("")).join("");
+  document.getElementById("heat").innerHTML = [...Array(C).keys()].map(c => {
+    const p = heat["column " + (c + 1)];
+    return `<div><i style="height:${p ? (100 * p).toFixed(0) : 0}%"></i><span>${p !== undefined ? pct(p) : c + 1}</span></div>`;
+  }).join("");
+}
+function finish() {
+  const w = winner(); if (!w) return false;
+  over = true; draw(w);
+  const st = document.getElementById("st");
+  if (w.who === "x") { score.x++; st.innerHTML = "<b>You win.</b>"; }
+  else if (w.who === "o") { score.o++; st.innerHTML = "<b>FERMI wins.</b>"; }
+  else { score.d++; st.innerHTML = "<b>Draw.</b>"; }
+  ["x", "o", "d"].forEach(k => document.getElementById("s" + k).textContent = score[k]);
+  return true;
+}
+async function fermiMove() {
+  busy = true;
+  const st = document.getElementById("st"); st.className = "status"; st.textContent = "FERMI is thinking…";
+  const {state, q} = stateAndQuestion();
+  document.getElementById("seen").textContent = JSON.stringify({state, question: q}, null, 1);
+  try {
+    const r = await fermiChoice(state, q, document.getElementById("avg").checked);
+    heat = r.pr;
+    drop(B, +r.best.split(" ")[1] - 1, "o");
+    document.getElementById("why").innerHTML = `<div class="dim" style="font-size:13px">FERMI's choice</div>` +
+      bars(Object.entries(r.pr).sort((a, b) => b[1] - a[1]).map(([k, p]) => [q.criteria[k] ? `${k}: ${q.criteria[k]}` : k, p]));
+    st.textContent = `FERMI played ${r.best} (${r.ms} ms). Your turn.`;
+    if (!finish()) draw();
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  busy = false;
+}
+function play(c) {
+  if (busy || over || free(c) < 0) return;
+  drop(B, c, "x"); heat = {}; draw();
+  if (!finish()) fermiMove();
+}
+function reset(fermiFirst) {
+  B = Array.from({length: R}, () => Array(C).fill(null)); busy = false; over = false; heat = {};
+  document.getElementById("why").innerHTML = ""; document.getElementById("st").textContent = fermiFirst ? "" : "Your move: click a column.";
+  draw();
+  if (fermiFirst) fermiMove();
+}
+reset(false);
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>

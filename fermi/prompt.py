@@ -54,10 +54,13 @@ def check_question(qid, q):
 class Builder:
     """Token ids and option positions for (state, question), with a tokenizer that has encode(text) -> ids."""
 
-    def __init__(self, encode):
+    def __init__(self, encode, fmt=None):
+        """fmt: (start up to "State:\n", end after the options), the base model's chat format used in training.
+        Default: the Qwen3.5 format of FERMI-0.8B (checkpoints without "prompt_format" in config.json)."""
         self.encode = encode
-        self.sys = encode(SYSTEM)
-        self.end = encode(END)
+        start, end = fmt or (SYSTEM, END)
+        self.sys = encode(start)
+        self.end = encode(end)
         self.ellipsis = encode(" […] ")[:3]
 
     def build(self, state_ids, q):

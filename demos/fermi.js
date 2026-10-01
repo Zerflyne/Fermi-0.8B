@@ -34,6 +34,24 @@ function answerItems(q, a) {
 
 async function deviceBadge(el) {
   const i = await fermiInfo();
-  el.innerHTML = i ? `<span class="pill">FERMI-0.8B · ${esc(i.device)} · ${esc(i.checkpoint)}</span>`
+  el.innerHTML = i ? `<span class="pill">${esc(i.model || "FERMI")} · ${esc(i.device)} · ${esc(i.checkpoint)}</span>`
                    : `<span class="pill err">server not running: python server.py</span>`;
+}
+
+// A "choice" question asked with its options in several orders and averaged: this cancels most of the position
+// bias of a small classifier. Up to 4 options: every order; more options: as given and reversed.
+// Returns {pr: {option: p}, best, ms}.
+function orders(keys) {
+  if (keys.length > 4) return [keys, [...keys].reverse()];
+  const perms = a => a.length <= 1 ? [a] : a.flatMap((x, i) => perms([...a.slice(0, i), ...a.slice(i + 1)]).map(p => [x, ...p]));
+  return perms(keys);
+}
+async function fermiChoice(state, q, average = true) {
+  const keys = Object.keys(q.criteria);
+  const os = average ? orders(keys) : [keys];
+  const qs = {};
+  os.forEach((o, i) => qs["o" + i] = {...q, criteria: Object.fromEntries(o.map(k => [k, q.criteria[k]]))});
+  const r = await fermi(state, qs);
+  const pr = Object.fromEntries(keys.map(k => [k, os.reduce((t, _, i) => t + r.answers["o" + i].probabilities[k], 0) / os.length]));
+  return {pr, best: keys.reduce((a, b) => pr[b] > pr[a] ? b : a), ms: r.ms};
 }

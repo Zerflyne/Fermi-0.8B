@@ -4,7 +4,8 @@
     m = Fermi.load()                         # GPU if available, otherwise CPU
     m.classify(state, {"q1": {"type": "noul", "instructions": "..."}})
 
-Base model: Qwen/Qwen3.5-0.8B (downloaded from Hugging Face, or a local folder). On top of it: a LoRA adapter
+Base model: the one named in the checkpoint's config.json (FERMI-0.8B: Qwen/Qwen3.5-0.8B, FERMI-2B: openbmb/MiniCPM5-2B),
+downloaded from Hugging Face or read from a local folder. On top of it: a LoRA adapter
 (merged into the weights at load time) and a small decision head that scores every option.
 """
 import inspect
@@ -78,22 +79,24 @@ class Fermi:
         self.device = device
         self.dtype = dtype
         self.config = config
-        self.builder = Builder(lambda s: tokenizer(s, add_special_tokens=False)["input_ids"])
+        self.builder = Builder(lambda s: tokenizer(s, add_special_tokens=False)["input_ids"], config.get("prompt_format"))
+        self.pad = config.get("pad_id", PAD)
         self.lock = threading.Lock()
 
     @classmethod
     def load(cls, checkpoint=DEFAULT_CKPT, base=None, device="auto", dtype=None, verbose=True):
         """checkpoint: folder with adapter.safetensors, head.safetensors, config.json.
-        base: Hugging Face id or local folder of Qwen3.5-0.8B (default: the one in config.json).
+        base: Hugging Face id or local folder of the base model (default: the one in config.json).
         dtype: default bfloat16 on GPU, float32 on CPU."""
         from peft import LoraConfig, get_peft_model, set_peft_model_state_dict
         from safetensors.torch import load_file
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
         cfg = json.load(open(os.path.join(checkpoint, "config.json")))
         base = base or os.environ.get("FERMI_BASE") or cfg["base_model"]
         dev = _pick_device(device)
-        fla = _kernels(dev)
+        # the kernel tweaks are for Qwen3.5's linear attention; other bases (MiniCPM5: plain attention) need none
+        fla = _kernels(dev) if AutoConfig.from_pretrained(base).model_type.startswith("qwen3_5") else False
         if dtype is None:
             dtype = torch.bfloat16 if dev.type == "cuda" else torch.float32
         if verbose:
@@ -144,7 +147,7 @@ class Fermi:
 
     def _run(self, group):
         L = max(len(x[2]) for x in group)
-        ids = torch.full((len(group), L), PAD, dtype=torch.long)
+        ids = torch.full((len(group), L), self.pad, dtype=torch.long)
         for i, (_, _, t, _) in enumerate(group):
             ids[i, :len(t)] = torch.tensor(t)
         ids = ids.to(self.device)

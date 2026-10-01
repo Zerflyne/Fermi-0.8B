@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI blackjack</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+.hand { display:flex; gap:8px; flex-wrap:wrap; min-height:86px; align-items:center; }
+.cardx { width:56px; height:80px; border-radius:8px; border:1px solid var(--line); background:#fff; color:#1b2230; display:flex;
+         flex-direction:column; justify-content:space-between; padding:5px 7px; font-weight:700; font-size:18px; box-shadow:0 1px 3px rgba(0,0,0,.15); }
+.cardx.red { color:#d64545; }
+.cardx.back { background:repeating-linear-gradient(45deg, var(--acc), var(--acc) 6px, #4a82f0 6px, #4a82f0 12px); }
+.cardx small { align-self:flex-end; font-size:20px; }
+.tot { font-size:14px; color:var(--dim); margin:4px 0 12px; }
+.stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:12px; }
+.stats div { border:1px solid var(--line); border-radius:10px; padding:6px 10px; background:var(--bg); }
+.stats b { display:block; font-size:20px; font-variant-numeric:tabular-nums; } .stats span { font-size:12px; color:var(--dim); }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Blackjack</h1><span id="dev"></span></header>
+<p class="dim" style="margin-top:-6px">FERMI plays the hand: before each card it answers "hit or stand?". Next to it, the textbook
+<b>basic strategy</b> (hit/stand only, dealer stands on all 17s) gives the right answer, so you can see how often a classifier
+that only read text about blackjack agrees with the math. Autoplay runs hands on its own.</p>
+<div class="grid2">
+  <div class="card">
+    <h2>Dealer</h2><div class="hand" id="dealer"></div><div class="tot" id="dtot"></div>
+    <h2>FERMI</h2><div class="hand" id="player"></div><div class="tot" id="ptot"></div>
+    <div class="row"><button class="primary" id="deal" onclick="playHand()">Deal one hand</button>
+      <button id="auto" onclick="toggleAuto()">Autoplay</button></div>
+  </div>
+  <div class="card">
+    <div class="stats">
+      <div><b id="s-hands">0</b><span>hands</span></div>
+      <div><b id="s-win">–</b><span>FERMI won / lost / push</span></div>
+      <div><b id="s-agree">–</b><span>same move as basic strategy</span></div>
+      <div><b id="s-ms">–</b><span>ms per decision</span></div>
+    </div>
+    <h2>Last decision</h2>
+    <div id="why" class="dim">Press Deal.</div>
+    <div class="status" id="st" style="margin-top:8px"></div>
+    <div id="log" style="font-size:13px;margin-top:8px"></div>
+  </div>
+</div>
+</main>
+<script src="fermi.js"></script>
+<script>
+const SUITS = ["♠", "♥", "♦", "♣"], RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+let shoe = [], auto = false, busy = false;
+const st = {hands: 0, w: 0, l: 0, p: 0, agree: 0, decisions: 0, ms: []};
+
+function newShoe() { shoe = []; for (let d = 0; d < 4; d++) for (const s of SUITS) for (const r of RANKS) shoe.push({r, s});
+  for (let i = shoe.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [shoe[i], shoe[j]] = [shoe[j], shoe[i]]; } }
+const draw1 = () => { if (shoe.length < 20) newShoe(); return shoe.pop(); };
+const val = c => c.r === "A" ? 11 : isNaN(+c.r) ? 10 : +c.r;
+function total(h) { let t = h.reduce((a, c) => a + val(c), 0), aces = h.filter(c => c.r === "A").length;
+  while (t > 21 && aces) { t -= 10; aces--; } return {t, soft: aces > 0}; }
+const name = c => (c.r === "A" ? "ace" : c.r === "J" ? "jack" : c.r === "Q" ? "queen" : c.r === "K" ? "king" : c.r);
+// basic strategy, hit or stand only, dealer stands on soft 17
+function basic(h, up) {
+  const {t, soft} = total(h), d = val(up) === 11 ? 11 : val(up);
+  if (soft) return t >= 19 || (t === 18 && d <= 8) ? "stand" : "hit";
+  if (t >= 17) return "stand";
+  if (t >= 13) return d <= 6 ? "stand" : "hit";
+  if (t === 12) return d >= 4 && d <= 6 ? "stand" : "hit";
+  return "hit";
+}
+function cardHtml(c, hidden) {
+  if (hidden) return `<div class="cardx back"></div>`;
+  const red = c.s === "♥" || c.s === "♦";
+  return `<div class="cardx ${red ? "red" : ""}"><span>${c.r}</span><small>${c.s}</small></div>`;
+}
+function show(p, d, hideHole) {
+  document.getElementById("player").innerHTML = p.map(c => cardHtml(c)).join("");
+  document.getElementById("dealer").innerHTML = d.map((c, i) => cardHtml(c, hideHole && i === 1)).join("");
+  const pt = total(p), dt = total(hideHole ? [d[0]] : d);
+  document.getElementById("ptot").textContent = `${pt.soft ? "soft " : ""}${pt.t}`;
+  document.getElementById("dtot").textContent = hideHole ? `showing ${dt.t}` : `${dt.t}`;
+}
+async function decide(p, up) {
+  const {t, soft} = total(p);
+  const state = {game: "blackjack", your_cards: p.map(name).join(", "), your_total: `${soft ? "soft " : "hard "}${t}`,
+                 dealer_shows: name(up), rules: "Get closer to 21 than the dealer without going over. Going over 21 loses at once. The dealer must hit until 17 and stands on all 17s. An ace counts 11 or 1 (soft total = an ace still counted as 11)."};
+  const q = {type: "choice", instructions: "Should the player hit (take another card) or stand (keep the current total)?",
+             criteria: {hit: "take another card", stand: "keep the current total"}};
+  const r = await fermiChoice(state, q, true);
+  st.ms.push(r.ms); if (st.ms.length > 30) st.ms.shift();
+  return {move: r.best, pr: r.pr};
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function playHand() {
+  if (busy) return; busy = true;
+  document.getElementById("deal").disabled = true;
+  const s = document.getElementById("st"); s.className = "status";
+  try {
+    const p = [draw1(), draw1()], d = [draw1(), draw1()];
+    show(p, d, true);
+    const moves = [];
+    while (total(p).t < 21) {
+      s.textContent = "FERMI is thinking…";
+      const right = basic(p, d[0]);
+      const {move, pr} = await decide(p, d[0]);
+      const ok = move === right; st.decisions++; st.agree += ok;
+      document.getElementById("why").innerHTML = bars([["hit", pr.hit], ["stand", pr.stand]]) +
+        `<div class="dim" style="font-size:13px;margin-top:4px">${total(p).soft ? "soft " : ""}${total(p).t} vs dealer ${name(d[0])}: basic strategy says <b>${right}</b> ${ok ? "✓" : "✗"}</div>`;
+      moves.push(`${total(p).t}${total(p).soft ? "s" : ""}→${move}${ok ? "" : "✗"}`);
+      if (move === "stand") break;
+      p.push(draw1()); show(p, d, true); await sleep(auto ? 150 : 400);
+    }
+    const pt = total(p).t;
+    if (pt <= 21) { while (total(d).t < 17) d.push(draw1()); }
+    show(p, d, false);
+    const dt = total(d).t;
+    const res = pt > 21 ? "lost (bust)" : dt > 21 ? "won (dealer bust)" : pt > dt ? "won" : pt < dt ? "lost" : "push";
+    st.hands++; res.startsWith("won") ? st.w++ : res.startsWith("lost") ? st.l++ : st.p++;
+    s.textContent = `FERMI ${pt} vs dealer ${dt}: ${res}.`;
+    const li = document.createElement("div"); li.className = "dim";
+    li.textContent = `#${st.hands}: ${moves.join(", ") || "21"} · ${pt} vs ${dt} · ${res}`;
+    const log = document.getElementById("log"); log.prepend(li); while (log.children.length > 8) log.lastChild.remove();
+    document.getElementById("s-hands").textContent = st.hands;
+    document.getElementById("s-win").textContent = `${st.w} / ${st.l} / ${st.p}`;
+    document.getElementById("s-agree").textContent = st.decisions ? pct(st.agree / st.decisions) : "–";
+    document.getElementById("s-ms").textContent = Math.round(st.ms.reduce((a, b) => a + b, 0) / Math.max(1, st.ms.length)) || "–";
+  } catch (e) { s.className = "status err"; s.textContent = e.message; auto = false; }
+  busy = false; document.getElementById("deal").disabled = false;
+}
+async function toggleAuto() {
+  auto = !auto; document.getElementById("auto").textContent = auto ? "Stop" : "Autoplay";
+  while (auto) { await playHand(); await sleep(700); }
+}
+newShoe(); show([], [], false);
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>

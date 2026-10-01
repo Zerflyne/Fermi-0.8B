@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI snake</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+canvas { width:min(440px, 100%); aspect-ratio:1; display:block; border-radius:12px; border:1px solid var(--line); background:var(--bg); }
+.stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:12px; }
+.stats div { border:1px solid var(--line); border-radius:10px; padding:6px 10px; background:var(--bg); }
+.stats b { display:block; font-size:22px; font-variant-numeric:tabular-nums; }
+.stats span { font-size:12px; color:var(--dim); }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.seg button { border:0; border-radius:0; }
+.seg button.on { background:var(--acc); color:#fff; }
+label.sl { font-size:13px; color:var(--dim); display:flex; gap:8px; align-items:center; }
+.deaths { font-size:13px; color:var(--dim); margin-top:10px; }
+pre { max-height:220px; font-size:11.5px; }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Snake</h1><span id="dev"></span></header>
+<p class="dim" style="margin-top:-6px">FERMI plays snake in real time. Before every step it gets the board as its state and answers one
+"pick one option" question: which way to go. The arrows around the head show the probability it gave each direction.
+Switch between the three kinds of state to see how much a classifier depends on what you tell it: a bare grid is hard to read
+for a 2B model, plain facts about each move are easy.</p>
+<div class="grid2">
+  <div class="card">
+    <canvas id="cv" width="440" height="440"></canvas>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="go" onclick="toggle()">Start</button>
+      <button onclick="newGame(); draw()">Reset</button>
+      <span class="seg"><button id="m0" onclick="setMode(0)">Grid only</button><button id="m1" onclick="setMode(1)">Grid + hints</button><button id="m2" onclick="setMode(2)">Hints only</button></span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="sl"><input type="checkbox" id="avg" checked> Average over all option orders</label>
+      <label class="sl">Min. time per step <input type="range" id="spd" min="0" max="600" step="50" value="150"><span id="spdv"></span></label>
+    </div>
+  </div>
+  <div class="card">
+    <div class="stats">
+      <div><b id="s-len">3</b><span>length</span></div>
+      <div><b id="s-best">0</b><span>best score</span></div>
+      <div><b id="s-games">0</b><span>games</span></div>
+      <div><b id="s-ms">–</b><span>ms per step</span></div>
+    </div>
+    <h2>Last decision</h2>
+    <div id="why" class="dim">Press Start.</div>
+    <div class="status" id="st" style="margin-top:8px"></div>
+    <div class="deaths" id="deaths"></div>
+    <details style="margin-top:10px"><summary class="dim" style="font-size:13px;cursor:pointer">What FERMI sees</summary><pre id="seen"></pre></details>
+  </div>
+</div>
+</main>
+<script src="fermi.js"></script>
+<script>
+const N = 10, STARVE = 120;
+const DIRS = {up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0]};
+const OPP = {up: "down", down: "up", left: "right", right: "left"};
+let snake, dir, food, score, steps, hungry, alive, running = false, mode = 2, last = null, games = 0, best = 0;
+const deaths = {wall: 0, body: 0, starved: 0};
+const times = [];
+
+function rnd(n) { return Math.floor(Math.random() * n); }
+function placeFood() {
+  const free = [];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (!snake.some(s => s[0] === x && s[1] === y)) free.push([x, y]);
+  food = free[rnd(free.length)];
+}
+function newGame() {
+  const y = 2 + rnd(N - 4);
+  snake = [[4, y], [3, y], [2, y]]; dir = "right"; score = 0; steps = 0; hungry = 0; alive = true; last = null;
+  placeFood();
+}
+// what happens if the head moves to d: "wall" | "body" | "food" | "empty"
+function outcome(d) {
+  const [hx, hy] = snake[0], [dx, dy] = DIRS[d], x = hx + dx, y = hy + dy;
+  if (x < 0 || y < 0 || x >= N || y >= N) return {x, y, kind: "wall"};
+  const eats = x === food[0] && y === food[1];
+  const body = eats ? snake : snake.slice(0, -1);          // the tail moves away unless the snake grows
+  if (body.some(s => s[0] === x && s[1] === y)) return {x, y, kind: "body"};
+  return {x, y, kind: eats ? "food" : "empty"};
+}
+// free cells reachable from (x, y) after the move (flood fill), the snake body as walls
+function room(x, y, eats) {
+  const blocked = new Set((eats ? snake : snake.slice(0, -1)).map(s => s[0] + "," + s[1]));
+  const seen = new Set([x + "," + y]), q = [[x, y]];
+  while (q.length) {
+    const [a, b] = q.pop();
+    for (const [dx, dy] of Object.values(DIRS)) {
+      const nx = a + dx, ny = b + dy, k = nx + "," + ny;
+      if (nx < 0 || ny < 0 || nx >= N || ny >= N || blocked.has(k) || seen.has(k)) continue;
+      seen.add(k); q.push([nx, ny]);
+    }
+  }
+  return seen.size;
+}
+const dist = (x, y) => Math.abs(x - food[0]) + Math.abs(y - food[1]);
+const where = (x, y) => `row ${y + 1}, column ${x + 1}`;
+function rel(x, y) {
+  const p = [];
+  if (food[1] < y) p.push(`${y - food[1]} up`); if (food[1] > y) p.push(`${food[1] - y} down`);
+  if (food[0] < x) p.push(`${x - food[0]} left`); if (food[0] > x) p.push(`${food[0] - x} right`);
+  return p.join(" and ");
+}
+function grid() {
+  const g = Array.from({length: N}, () => Array(N).fill("."));
+  g[food[1]][food[0]] = "*";
+  snake.forEach(([x, y], i) => g[y][x] = i === 0 ? "H" : "o");
+  return g.map(r => r.join(" "));
+}
+function stateAndQuestion() {
+  const [hx, hy] = snake[0];
+  const options = Object.keys(DIRS).filter(d => d !== OPP[dir]);   // it can't turn back into itself
+  const state = {game: "snake"};
+  if (mode < 2) Object.assign(state, {board_top_to_bottom: grid(),
+    legend: "H = snake head, o = snake body, * = food, . = empty. Outside the board is a wall."});
+  Object.assign(state, {moving: dir, length: snake.length});
+  const crit = {};
+  if (mode === 0) {
+    for (const d of options) crit[d] = {up: "move one row up", down: "move one row down", left: "move one column left", right: "move one column right"}[d];
+  } else {
+    state.head = where(hx, hy); state.food = `${where(...food)}: ${rel(hx, hy)} of the head`;
+    for (const d of options) {
+      const o = outcome(d);
+      if (o.kind === "wall") { crit[d] = "Deadly: crashes into the wall. Game over."; continue; }
+      if (o.kind === "body") { crit[d] = "Deadly: crashes into the snake's own body. Game over."; continue; }
+      const free = room(o.x, o.y, o.kind === "food");
+      const trap = free < snake.length + 2 ? ` But it leads into a closed area of only ${free} cells: the snake will get trapped.` : "";
+      crit[d] = o.kind === "food" ? "Safe. Eats the food!" + trap
+              : (dist(o.x, o.y) < dist(hx, hy) ? "Safe. Gets closer to the food." : "Safe. Gets farther from the food.") + trap;
+    }
+    if (mode === 2) state.moves = Object.fromEntries(options.map(d => [d, crit[d]]));
+  }
+  const q = {type: "choice", criteria: crit,
+             instructions: mode === 0 ? "Which way should the snake move next? It must not hit the wall or its own body, and it should get closer to the food."
+                                      : "Which way should the snake move next? Pick a safe move that gets closer to the food."};
+  return {state, q};
+}
+const perms = a => a.length <= 1 ? [a] : a.flatMap((x, i) => perms([...a.slice(0, i), ...a.slice(i + 1)]).map(p => [x, ...p]));
+// the same question with the options in every order, averaged: this cancels the model's position bias
+async function decide(state, q) {
+  const keys = Object.keys(q.criteria);
+  const orders = document.getElementById("avg").checked ? perms(keys) : [keys];
+  const qs = {};
+  orders.forEach((o, i) => qs["m" + i] = {...q, criteria: Object.fromEntries(o.map(k => [k, q.criteria[k]]))});
+  const r = await fermi(state, qs);
+  const pr = Object.fromEntries(keys.map(k => [k, orders.reduce((t, _, i) => t + r.answers["m" + i].probabilities[k], 0) / orders.length]));
+  return {pr, d: keys.reduce((a, b) => pr[b] > pr[a] ? b : a), ms: r.ms};
+}
+async function step() {
+  const {state, q} = stateAndQuestion();
+  document.getElementById("seen").textContent = JSON.stringify({state, question: q}, null, 1);
+  const r = await decide(state, q);
+  times.push(r.ms); if (times.length > 20) times.shift();
+  const {pr, d} = r;
+  last = {pr, d};
+  dir = d;
+  const o = outcome(d);
+  steps++; hungry++;
+  if (o.kind === "wall" || o.kind === "body") return die(o.kind, d);
+  snake.unshift([o.x, o.y]);
+  if (o.kind === "food") { score++; hungry = 0; best = Math.max(best, score); if (snake.length === N * N) return die("won", d); placeFood(); }
+  else snake.pop();
+  if (hungry >= STARVE) return die("starved", d);
+  showWhy(q);
+}
+function die(kind, d) {
+  alive = false; games++;
+  if (deaths[kind] !== undefined) deaths[kind]++;
+  const st = document.getElementById("st");
+  st.className = "status err";
+  st.textContent = kind === "starved" ? `Starved: ${STARVE} steps without food. Score ${score}.`
+                 : kind === "won" ? "The board is full!" : `Went ${d} into the ${kind === "wall" ? "wall" : "snake's body"}. Score ${score}.`;
+  document.getElementById("deaths").textContent =
+    `Game over by: wall ${deaths.wall} · own body ${deaths.body} · starvation ${deaths.starved}`;
+}
+function showWhy(q) {
+  const items = Object.entries(last.pr).sort((a, b) => b[1] - a[1]).map(([k, p]) => [mode ? `${k}: ${q.criteria[k]}` : k, p]);
+  document.getElementById("why").innerHTML = bars(items);
+  const st = document.getElementById("st"); st.className = "status";
+  st.textContent = `Step ${steps}, score ${score}. FERMI went ${last.d}.`;
+}
+async function loop() {
+  while (running) {
+    if (!alive) { await sleep(1200); if (!running) break; newGame(); }
+    const t = performance.now();
+    try { await step(); }
+    catch (e) { running = false; document.getElementById("st").className = "status err"; document.getElementById("st").textContent = e.message; }
+    draw(); stats();
+    const wait = +document.getElementById("spd").value - (performance.now() - t);
+    if (wait > 0) await sleep(wait);
+  }
+  document.getElementById("go").textContent = "Start";
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function toggle() {
+  running = !running;
+  document.getElementById("go").textContent = running ? "Pause" : "Start";
+  if (running) loop();
+}
+function setMode(m) {
+  mode = m;
+  [0, 1, 2].forEach(i => document.getElementById("m" + i).className = m === i ? "on" : "");
+}
+function stats() {
+  document.getElementById("s-len").textContent = snake.length;
+  document.getElementById("s-best").textContent = best;
+  document.getElementById("s-games").textContent = games;
+  document.getElementById("s-ms").textContent = times.length ? Math.round(times.reduce((a, b) => a + b) / times.length) : "–";
+}
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function draw() {
+  const cv = document.getElementById("cv"), c = cv.getContext("2d"), s = cv.width / N;
+  c.clearRect(0, 0, cv.width, cv.height);
+  c.strokeStyle = css("--line"); c.lineWidth = 1;
+  for (let i = 1; i < N; i++) { c.beginPath(); c.moveTo(i * s, 0); c.lineTo(i * s, cv.height); c.moveTo(0, i * s); c.lineTo(cv.width, i * s); c.stroke(); }
+  // food
+  c.fillStyle = css("--bad");
+  c.beginPath(); c.arc((food[0] + .5) * s, (food[1] + .5) * s, s * .3, 0, 7); c.fill();
+  // snake
+  snake.forEach(([x, y], i) => {
+    c.fillStyle = i === 0 ? css("--acc2") : css("--acc");
+    c.globalAlpha = i === 0 ? 1 : 1 - 0.5 * i / snake.length;
+    c.beginPath(); c.roundRect(x * s + 3, y * s + 3, s - 6, s - 6, 8); c.fill();
+  });
+  c.globalAlpha = 1;
+  if (!alive) { c.fillStyle = css("--bad"); c.globalAlpha = .15; c.fillRect(0, 0, cv.width, cv.height); c.globalAlpha = 1; }
+  // FERMI's probabilities: an arrow from the head for every option
+  if (last && alive) {
+    const [hx, hy] = snake[1] || snake[0];   // the decision was taken from the previous head
+    for (const [d, p] of Object.entries(last.pr)) {
+      const [dx, dy] = DIRS[d], cx = (hx + .5) * s, cy = (hy + .5) * s;
+      const ex = cx + dx * s * (0.35 + 0.6 * p), ey = cy + dy * s * (0.35 + 0.6 * p);
+      c.strokeStyle = d === last.d ? css("--acc2") : css("--txt"); c.globalAlpha = 0.25 + 0.75 * p;
+      c.lineWidth = 2 + 6 * p; c.lineCap = "round";
+      c.beginPath(); c.moveTo(cx, cy); c.lineTo(ex, ey); c.stroke();
+      c.globalAlpha = 1; c.fillStyle = css("--txt"); c.font = `600 ${Math.round(s * .26)}px system-ui`; c.textAlign = "center";
+      c.fillText(Math.round(100 * p) + "%", cx + dx * s * 1.05, cy + dy * s * 1.05 + s * .09);
+    }
+  }
+}
+const spd = document.getElementById("spd"), spdv = document.getElementById("spdv");
+spd.oninput = () => spdv.textContent = spd.value + " ms"; spd.oninput();
+setMode(2); newGame(); draw(); stats();
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>

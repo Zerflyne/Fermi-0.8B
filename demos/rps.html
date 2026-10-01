@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FERMI rock paper scissors</title>
+<link rel="stylesheet" href="fermi.css">
+<style>
+.moves { display:flex; gap:10px; }
+.moves button { font-size:34px; padding:10px 18px; border-radius:14px; }
+.vs { display:flex; align-items:center; gap:16px; font-size:46px; min-height:70px; }
+.vs small { font-size:14px; color:var(--dim); }
+.stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:12px; }
+.stats div { border:1px solid var(--line); border-radius:10px; padding:6px 10px; background:var(--bg); }
+.stats b { display:block; font-size:20px; font-variant-numeric:tabular-nums; } .stats span { font-size:12px; color:var(--dim); }
+.hist { font-size:22px; letter-spacing:2px; word-break:break-all; }
+label.sl { font-size:13px; color:var(--dim); display:flex; gap:6px; align-items:center; }
+</style>
+</head>
+<body>
+<main>
+<nav class="back"><a href="index.html">← demos</a></nav>
+<header class="top"><h1>Rock, paper, scissors</h1><span id="dev"></span></header>
+<p class="dim" style="margin-top:-6px">Before every round FERMI reads the history of the game and answers one question: <i>what will the
+opponent play next?</i> Then it plays the move that beats its prediction. Against a truly random player nobody can do better
+than a third; people (and simple bots) are not random. Try a bot to see whether FERMI spots the pattern.</p>
+<div class="grid2">
+  <div class="card">
+    <div class="row" style="margin-bottom:10px"><span class="dim" style="font-size:13px">Opponent:</span>
+      <select id="opp" style="width:auto" onchange="resetGame()">
+        <option value="you">You</option><option value="cycle">Bot: rock → paper → scissors → …</option>
+        <option value="copy">Bot: plays what FERMI played last</option><option value="beat">Bot: beats FERMI's last move</option>
+        <option value="rock">Bot: rock 60% of the time</option><option value="random">Bot: random</option>
+      </select></div>
+    <div class="moves" id="mine">
+      <button onclick="round('rock')" title="R">✊</button><button onclick="round('paper')" title="P">✋</button><button onclick="round('scissors')" title="S">✌️</button>
+    </div>
+    <div class="row" style="margin-top:8px"><button id="autob" onclick="toggleAuto()" style="display:none">Run bot</button>
+      <label class="sl"><input type="checkbox" id="hints" checked> Hints (the page measures the opponent's habits)</label></div>
+    <div class="vs" id="vs" style="margin-top:12px"></div>
+    <div class="status" id="st"></div>
+  </div>
+  <div class="card">
+    <div class="stats">
+      <div><b id="s-r">0</b><span>rounds</span></div>
+      <div><b id="s-wl">0 / 0 / 0</b><span>FERMI won / lost / tied</span></div>
+      <div><b id="s-acc">–</b><span>predicted right (last 30)</span></div>
+      <div><b id="s-ms">–</b><span>ms per prediction</span></div>
+    </div>
+    <h2>FERMI's prediction of the next move</h2>
+    <div id="why" class="dim">Play a move.</div>
+    <h2 style="margin-top:14px">Opponent's moves</h2>
+    <div class="hist" id="hist"></div>
+    <details style="margin-top:10px"><summary class="dim" style="font-size:13px;cursor:pointer">What FERMI sees</summary><pre id="seen"></pre></details>
+  </div>
+</div>
+</main>
+<script src="fermi.js"></script>
+<script>
+const M = ["rock", "paper", "scissors"], ICON = {rock: "✊", paper: "✋", scissors: "✌️"};
+const BEATS = {rock: "paper", paper: "scissors", scissors: "rock"};          // BEATS[x] beats x
+let H, next, busy = false, auto = false, w, l, t, hits, ms;
+
+function resetGame() {
+  H = []; next = null; w = l = t = 0; hits = []; ms = [];
+  const bot = document.getElementById("opp").value !== "you";
+  document.getElementById("mine").style.display = bot ? "none" : "flex";
+  document.getElementById("autob").style.display = bot ? "" : "none";
+  auto = false; document.getElementById("autob").textContent = "Run bot";
+  document.getElementById("vs").innerHTML = ""; document.getElementById("why").textContent = bot ? "Press Run bot." : "Play a move.";
+  render(); predict();
+}
+function botMove() {
+  const o = document.getElementById("opp").value, last = H[H.length - 1];
+  if (o === "cycle") return M[H.length % 3];
+  if (o === "copy") return last ? last.fermi : "rock";
+  if (o === "beat") return last ? BEATS[last.fermi] : "paper";
+  if (o === "rock") return Math.random() < 0.6 ? "rock" : M[1 + Math.floor(Math.random() * 2)];
+  return M[Math.floor(Math.random() * 3)];
+}
+function state() {
+  return {game: "rock paper scissors", rules: "Rock beats scissors, scissors beats paper, paper beats rock.",
+          rounds_so_far: H.length, history_oldest_first: H.slice(-25).map(h => `opponent ${h.opp}, FERMI ${h.fermi}`)};
+}
+// with hints, the page measures two habits of the opponent (what it plays after its own last move, and after FERMI's
+// last move) and tells each option which habit, if any, points to it. FERMI still has to read that and pick.
+function criteria() {
+  const crit = {rock: "", paper: "", scissors: ""};
+  if (!document.getElementById("hints").checked || H.length < 3) return crit;
+  const last = H[H.length - 1];
+  const habits = [
+    {cond: `after the opponent played ${last.opp}`, seq: H.slice(1).filter((h, i) => H[i].opp === last.opp).map(h => h.opp)},
+    {cond: `after FERMI played ${last.fermi}`, seq: H.slice(1).filter((h, i) => H[i].fermi === last.fermi).map(h => h.opp)}];
+  for (const h of habits) {
+    h.n = h.seq.length;
+    h.top = M.reduce((x, y) => h.seq.filter(v => v === y).length > h.seq.filter(v => v === x).length ? y : x);
+    h.k = h.seq.filter(v => v === h.top).length;
+    h.share = h.n >= 3 ? h.k / h.n : 0;
+  }
+  habits.sort((x, y) => y.share - x.share);
+  const [strong, weak] = habits;
+  for (const m of M) {
+    if (strong.share > 0.5 && m === strong.top) crit[m] = `most likely: the opponent's strongest habit, ${strong.cond} it chose ${m} ${strong.k} of ${strong.n} times`;
+    else if (weak.share > 0.5 && m === weak.top) crit[m] = `less likely: only a weaker habit, ${weak.cond} it chose ${m} ${weak.k} of ${weak.n} times`;
+    else crit[m] = "unlikely: no clear habit points to it";
+  }
+  return crit;
+}
+async function predict() {
+  const s = state();
+  const q = {type: "choice", instructions: "Look for a pattern in the opponent's moves. What will the opponent play in the next round?",
+             criteria: criteria()};
+  document.getElementById("seen").textContent = JSON.stringify({state: s, question: q}, null, 1);
+  busy = true;
+  try {
+    const r = await fermiChoice(s, q, true);
+    next = r; ms.push(r.ms); if (ms.length > 30) ms.shift();
+    document.getElementById("why").innerHTML = bars(M.map(m => [`${ICON[m]} ${m}`, r.pr[m]]));
+  } catch (e) { const st = document.getElementById("st"); st.className = "status err"; st.textContent = e.message; auto = false; }
+  busy = false;
+}
+async function round(opp) {
+  if (busy || !next) return;
+  const fermiMove = BEATS[next.best];            // FERMI chose its move before seeing yours
+  const res = fermiMove === opp ? "tie" : BEATS[opp] === fermiMove ? "win" : "loss";
+  res === "win" ? w++ : res === "loss" ? l++ : t++;
+  hits.push(next.best === opp); if (hits.length > 30) hits.shift();
+  H.push({opp, fermi: fermiMove});
+  document.getElementById("vs").innerHTML = `${ICON[opp]}<small>vs</small>${ICON[fermiMove]}<small>${res === "win" ? "FERMI wins" : res === "loss" ? "opponent wins" : "tie"} · FERMI predicted ${ICON[next.best]}</small>`;
+  render();
+  await predict();
+}
+function render() {
+  document.getElementById("s-r").textContent = H.length;
+  document.getElementById("s-wl").textContent = `${w} / ${l} / ${t}`;
+  document.getElementById("s-acc").textContent = hits.length ? pct(hits.filter(Boolean).length / hits.length) : "–";
+  document.getElementById("s-ms").textContent = ms.length ? Math.round(ms.reduce((a, b) => a + b) / ms.length) : "–";
+  document.getElementById("hist").textContent = H.slice(-40).map(h => ICON[h.opp]).join("");
+}
+async function toggleAuto() {
+  auto = !auto; document.getElementById("autob").textContent = auto ? "Stop" : "Run bot";
+  while (auto) { while (busy) await new Promise(r => setTimeout(r, 30)); await round(botMove()); await new Promise(r => setTimeout(r, 250)); }
+}
+document.addEventListener("keydown", e => { const m = {r: "rock", p: "paper", s: "scissors"}[e.key.toLowerCase()];
+  if (m && document.getElementById("opp").value === "you") round(m); });
+resetGame();
+deviceBadge(document.getElementById("dev"));
+</script>
+</body>
+</html>
