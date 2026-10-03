@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/fermi-banner.svg" alt="FERMI" width="600"></p>
+
 # FERMI-0.8B
 
 **FERMI** (Fast Embedded Reasoning for Machine Inference) is a small open model that reads a **state** (any text or
@@ -15,6 +17,15 @@ Qwen3.5-0.8B + a LoRA adapter + a small decision head, trained for about 6 hours
 
 **Bigger sibling:** [FERMI-2B](https://github.com/Zerflyne/FERMI-2B) (MiniCPM5-2B base, one full epoch): 85.3% agreement
 with the teacher instead of 81.6%, same code and demos. Use it if you have ~5 GB of GPU memory.
+
+## Desktop app (easiest)
+
+The [FERMI app](https://github.com/Zerflyne/FERMI) runs FERMI-0.8B on Linux, Windows and macOS, on a graphics card (Vulkan,
+Metal) or on the CPU, with no Python: install it, pick FERMI-0.8B on the first start and it downloads
+[`gguf/FERMI-0.8B-Q8_0.gguf`](https://huggingface.co/Zerflyne/FERMI-0.8B/blob/main/gguf/FERMI-0.8B-Q8_0.gguf) by itself. That file
+is the base model with FERMI's LoRA merged in, quantized to Q8_0, with the decision head stored in its metadata; it is
+made for the app's llama.cpp runtime (it is not a chat model). The app has a playground, folder analysis with charts and
+a local JSON API.
 
 ## Quick start
 
